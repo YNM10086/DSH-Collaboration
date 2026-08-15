@@ -1,0 +1,17 @@
+# DSH Collab bundle patch: mount the multi-window collaboration plugin at the
+# host level. All sessions automatically get the collab_* tools, the write
+# interception (tools/pre-execute), the discipline prompt section, and the
+# heartbeat — surviving host restarts.
+#
+# Install:
+#   dsh plugin --profile <name> add "file:D:/Constantly-evolving/collab-bundle"
+#
+# Tune (override in profile cordis.patch.yml):
+#   - id: collab
+#     config:
+#       ttlMs: 900000        # lock expiry after heartbeat silence
+#       heartbeatMs: 60000   # heartbeat / lock-state refresh period
+- insert:
+    - id: collab
+      name: dsh-collab-bundle
+      config: {}

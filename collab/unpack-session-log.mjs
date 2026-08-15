@@ -1,9 +1,11 @@
-// 临时调试脚本：zstd 多帧扫描 + 逐帧解码会话日志，打印尾部事件
+// 用法：node collab/unpack-session-log.mjs <sessionId> [行数]
 import { zstdDecompressSync } from 'node:zlib'
 import { readFileSync, writeFileSync } from 'node:fs'
 
+const sessionId = process.argv[2] || 'session-0aced974-961b-4245-a99a-3ed38225a7bf'
+const tailLines = parseInt(process.argv[3] || '60', 10)
 const ZSTD_MAGIC = 0xFD2FB528
-const SRC = 'C:/Users/丧彪/.dsh/sessions/--D-Constantly-evolving--/session-0aced974-961b-4245-a99a-3ed38225a7bf/session.jsonl.zstd'
+const SRC = 'C:/Users/丧彪/.dsh/sessions/--D-Constantly-evolving--/' + sessionId + '/session.jsonl.zstd'
 const DST = 'D:/Constantly-evolving/.dsh/collab/session-debug.txt'
 
 function scanZstdFrames(buffer, maxFrames = Number.POSITIVE_INFINITY) {
@@ -61,7 +63,7 @@ for (const f of frames) {
 writeFileSync(DST, text)
 const lines = text.split('\n').filter((l) => l.trim())
 console.log('records:', lines.length)
-const tail = lines.slice(-100)
+const tail = lines.slice(-tailLines)
 for (const l of tail) {
   try {
     const j = JSON.parse(l)

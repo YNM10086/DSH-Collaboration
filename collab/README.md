@@ -2,15 +2,21 @@
 
 多窗口同项目协作：共享任务板 + 文件认领锁（排队接管）+ 写入拦截（防肘击）+ 审计日志。
 
-## 每个窗口都要做的事
+## 部署（bundle 版 v3.0，推荐）
 
-动态插件是会话私有的——**每个窗口各跑一份**。在新窗口里：
+```sh
+dsh plugin --profile web add "file:D:/Constantly-evolving/collab-bundle"
+# 然后重启 DSH web 应用
+```
 
-1. 读取本文件同目录的 `plugin-host.js`（它就是 `code.host` 的函数体）
-2. 调 `cordis_define`：`kind: "new"`，`idPrefix: "collab"`，`code.host` = 文件内容
-3. 调 `cordis_run` 激活
+- 装进 profile 后**所有窗口自动获得 collab 工具**，无需每窗口手动挂载
+- **随宿主启动自动加载，进程重启不丢**（动态插件版的最大痛点已解决）
+- 身份按"调用者 agent"区分（fork 窗口共享 sessionId 也互不干扰），用户可随时用 `collab_identity letter=X` 指定
 
-窗口自动注册身份（A、B、C……，注册表 `.dsh/collab/identity.json`，重启复用）。
+## 动态插件版（备用/免安装）
+
+读 `collab/plugin-host.js`（v2.1），每窗口 `cordis_define`(kind=new, idPrefix=collab) + `cordis_run`。
+注意：动态插件进程重启即失，需重新挂载；bundle 版无此问题。
 
 ## 工具
 

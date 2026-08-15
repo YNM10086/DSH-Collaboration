@@ -10,6 +10,9 @@
 // v1.6 修复：fs.writeText 必须传 sandboxPolicy（ctx.sandboxPolicy.resolve({session})），否则沙箱后端拒绝写入。
 // v1.7 修复：normalize 剥离工作区前缀——write 工具传绝对路径，锁 key 是相对路径，此前不匹配导致守卫漏拦。
 // v1.8 修复：tools.guard 在动态插件上下文未生效（零调用），改走 tools/pre-execute waterfall（deny 决策）+ 保留 guard 双通道。
+// v1.9 修复：身份注册写后验证 + 冲突重选（并发首启竞态）；板子顶部加"身份以 collab_status 为准"防新窗口误读。
+// v2.0 特性：collab_identity 工具——用户直接指定窗口身份（letter 参数），被占用可 force 接管；纪律改为"身份以用户指定为准"。
+// v2.1 修复：身份注册表 key 改为 sessionId#窗口实例token——fork 出的窗口共用 sessionId，旧 key 导致 A/B 互相覆盖。
 return {
   inject: ['timer'],
   apply(ctx) {
@@ -30,12 +33,19 @@ return {
       }
 
       // ---- 内存状态 ----
+      // 窗口实例 token：fork 出的窗口可能共用 sessionId，必须用实例级 key 区分
+      const windowToken = Math.random().toString(36).slice(2, 8)
       const state = {
         workspaceRoot: undefined,  // 惰性解析，缓存
         session: undefined,        // 会话对象（写文件时用于解析 sandboxPolicy）
-        sessionId: undefined,      // 本窗口会话 id
+        sessionId: undefined,      // 本窗口会话 id（fork 窗口可能共用）
+        windowToken: windowToken,  // 本窗口实例唯一 token
         letter: undefined,         // A / B / C ...
         locks: new Map(),          // 规范化文件路径 -> { holder, task, files, claimedAt, heartbeat, queue }
+      }
+      // 注册表 key：sessionId#token（实例唯一）
+      function identityKey() {
+        return (state.sessionId || 'unknown') + '#' + state.windowToken
       }
 
       const now = () => Date.now()
@@ -134,30 +144,49 @@ return {
         return writeTextSafe(path, JSON.stringify(obj, null, 2))
       }
 
-      // ---- 身份注册（解析工作区后读一次） ----
+      // ---- 身份注册（key=sessionId#token；写后验证防并发竞态） ----
       async function ensureIdentity() {
-        if (state.letter || !state.workspaceRoot) return
+        if (state.letter) return
         let sid
         const agent = agents.currentInitiator()
         try { sid = agent && (agent.id || agent.sessionId) } catch (e) { sid = undefined }
         state.sessionId = sid ? String(sid) : 'unknown'
+        const myKey = identityKey()
         const idFile = collabPath('identity.json')
-        let map = {}
-        const raw = await readTextSafe(idFile)
-        if (raw) { try { map = JSON.parse(raw) } catch (e) { map = {} } }
-        if (state.sessionId !== 'unknown' && map[state.sessionId]) {
-          state.letter = map[state.sessionId]
-          log('身份复用:', state.letter, state.sessionId)
-          return
+        for (let attempt = 0; attempt < 3; attempt++) {
+          let map = {}
+          const raw = await readTextSafe(idFile)
+          if (raw) { try { map = JSON.parse(raw) } catch (e) { map = {} } }
+          // 迁移：清理旧格式（无 # 的 sessionId 直接作 key）条目
+          for (const k of Object.keys(map)) {
+            if (k.indexOf('#') === -1) delete map[k]
+          }
+          if (map[myKey]) {
+            state.letter = map[myKey]
+            log('身份复用:', state.letter, myKey)
+            return
+          }
+          const used = new Set(Object.keys(map).map(k => map[k]))
+          let pick
+          for (const L of LETTERS) { if (!used.has(L)) { pick = L; break } }
+          if (!pick) pick = 'Z'
+          if (state.sessionId === 'unknown') { state.letter = pick; return }
+          map[myKey] = pick
+          if (await writeJson(idFile, map)) {
+            // 写后验证：确认自己的注册没被并发覆盖
+            const after = await readTextSafe(idFile)
+            let verify = {}
+            if (after) { try { verify = JSON.parse(after) } catch (e) { verify = {} } }
+            if (verify[myKey] === pick) {
+              state.letter = pick
+              log('身份注册:', state.letter, myKey)
+              return
+            }
+            log('身份注册竞态，重试', attempt + 1)
+          }
         }
-        const used = new Set(Object.keys(map).map(k => map[k]))
-        for (const L of LETTERS) { if (!used.has(L)) { state.letter = L; break } }
-        if (!state.letter) state.letter = 'Z'
-        if (state.sessionId !== 'unknown') {
-          map[state.sessionId] = state.letter
-          await writeJson(idFile, map)
-        }
-        log('身份注册:', state.letter, state.sessionId)
+        state.letter = 'Z'
+        log('身份注册重试耗尽，兜底 Z:', myKey)
       }
 
       // ---- 审计（内存队列 + 周期落盘） ----
@@ -304,6 +333,7 @@ return {
         }
         rows.sort()
         let md = '# 协作任务板\n\n'
+        md += '> ⚠️ 本板子由插件自动生成；你的窗口身份请用 collab_status 查询，不要从本文件推断\n\n'
         md += '> 最后更新：' + new Date().toISOString() + '（窗口' + (state.letter || '?') + '）\n\n'
         if (conflicts.length) {
           md += '> ⚠️ 冲突：' + conflicts.map(c => '`' + c + '`').join('、') + ' 被多个窗口改动，建议 git diff 人工裁决\n\n'
@@ -370,6 +400,7 @@ return {
               '3. 只写自己认领或未认领的文件；写被锁文件会被拦截，拦截时按提示排队或绕开。',
               '4. 完成时用 collab_done 释放锁并登记改动文件。',
               '5. 每回合开始、每次写文件前，先 collab_board --refresh 刷新板子。',
+              '6. 你的窗口身份（字母）以用户指定为准：用户说"你是X"就用 collab_identity letter=X 确认；没指定时用 collab_status 查询，不要从 board.md 等文件内容推断。',
             ].join('\n'),
           })
           log('协作纪律已注入 systemPrompt')
@@ -462,6 +493,65 @@ return {
               else if ((lock.queue || []).indexOf(state.letter) !== -1) queued.push(k + '(第' + (lock.queue.indexOf(state.letter) + 1) + '位)')
             }
             return { result: '窗口' + state.letter + '（session ' + state.sessionId + '）\n持锁: ' + (held.length ? held.join(', ') : '无') + '\n排队: ' + (queued.length ? queued.join(', ') : '无') }
+          },
+        },
+        {
+          name: 'collab_identity',
+          description: '查询或指定本窗口身份字母：无参数=查看当前身份与注册表全貌；带 letter=把本窗口绑定到指定字母（该字母被其他窗口占用时需 force=true 接管）。',
+          parameters: {
+            letter: { type: 'string', description: '要绑定的身份字母（A-Z，大写）' },
+            force: { type: 'boolean', description: 'true = 即使该字母被其他窗口占用也接管（谨慎）' },
+          },
+          output: textOutput(),
+          async execute(args, exec) {
+            if (!(await resolveWorkspace())) return { result: '⚠️ 协作工作区未解析，插件未激活' }
+            if (!state.sessionId) {
+              const agent = agents.currentInitiator()
+              try { state.sessionId = agent && (agent.id || agent.sessionId) ? String(agent.id || agent.sessionId) : 'unknown' } catch (e) { state.sessionId = 'unknown' }
+            }
+            const idFile = collabPath('identity.json')
+            let map = {}
+            const raw = await readTextSafe(idFile)
+            if (raw) { try { map = JSON.parse(raw) } catch (e) { map = {} } }
+            // 迁移：清理旧格式（无 # 的 sessionId 直接作 key）条目
+            for (const k of Object.keys(map)) {
+              if (k.indexOf('#') === -1) delete map[k]
+            }
+            const myKey = identityKey()
+            const want = args && args.letter ? String(args.letter).toUpperCase() : undefined
+            if (!want) {
+              await ensureIdentity()
+              const lines = []
+              lines.push('本窗口身份：' + (state.letter || '未注册') + '（key ' + myKey + '）')
+              lines.push('注册表：')
+              const keys = Object.keys(map).sort()
+              if (!keys.length) lines.push('  （空）')
+              for (const k of keys) lines.push('  窗口' + map[k] + ' ← ' + k)
+              return { result: lines.join('\n') }
+            }
+            if (!/^[A-Z]$/.test(want)) return { result: '⚠️ 身份字母必须是单个大写字母 A-Z' }
+            if (want === state.letter) return { result: '✅ 本窗口身份确认：窗口' + want + '（无变更）' }
+            let occupiedBy = null
+            for (const k of Object.keys(map)) {
+              if (map[k] === want && k !== myKey) { occupiedBy = k; break }
+            }
+            if (occupiedBy && !(args && args.force)) {
+              return { result: '⛔ 窗口' + want + ' 已被其他窗口占用（key ' + occupiedBy + '）。确认由本窗口接管请传 force=true，或另选字母。' }
+            }
+            if (state.sessionId !== 'unknown') {
+              if (occupiedBy && args && args.force) delete map[occupiedBy]
+              map[myKey] = want
+            }
+            if (!(await writeJson(idFile, map))) return { result: '❌ 身份写入失败' }
+            const after = await readTextSafe(idFile)
+            let verify = {}
+            if (after) { try { verify = JSON.parse(after) } catch (e) { verify = {} } }
+            if (verify[myKey] !== want) return { result: '⚠️ 身份写入验证失败（并发冲突），请重试' }
+            state.letter = want
+            audit('identity', 'assigned', 'window ' + want + (occupiedBy ? ' (force, released ' + occupiedBy + ')' : ''))
+            await renderBoard()
+            await flushLog()
+            return { result: '✅ 本窗口身份已指定：窗口' + want + '（key ' + myKey + '）' }
           },
         },
       ]
