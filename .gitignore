@@ -1,0 +1,13 @@
+# DSH Collab 运行时状态（设计见 docs/superpowers/specs/2026-08-15-dsh-collab-plugin-design.md）
+.dsh/collab/locks/
+.dsh/collab/activity.log
+.dsh/collab/identity.json
+
+# 会话记忆（每用户工具状态，自动重建）
+_session_context.md
+
+# 编辑器/系统噪音
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
