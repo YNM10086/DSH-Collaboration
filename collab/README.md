@@ -2,21 +2,36 @@
 
 多窗口同项目协作：共享任务板 + 文件认领锁（排队接管）+ 写入拦截（防肘击）+ 审计日志。
 
-## 部署（bundle 版 v3.0，推荐）
+## 两种模式
+
+| 模式 | 何时用 | 怎么开 |
+|---|---|---|
+| **bundle 常驻**（推荐） | 已装进 profile，宿主启动自动加载，所有窗口自动有工具，重启不丢 | 无需操作（`dsh plugin add` 装过一次即可） |
+| **按需开启** | 不想装 bundle / 临时用 / bundle 出问题时 | 任何窗口说 **"开启并行模式"** → 窗口立即用动态插件挂载（见下） |
+
+> 无论哪种模式，**窗口身份都由用户指定**：对窗口说"你是X"，窗口执行 `collab_identity letter=X` 确认。
+
+## 按需开启（动态插件版）
+
+窗口收到"开启并行模式"指令后：
+
+1. 读 `collab/plugin-host.js`（v2.1，它就是 `code.host` 函数体）
+2. `cordis_define`（kind: "new"，idPrefix: "collab"）+ `cordis_run`
+3. `collab_identity letter=X` 绑定身份
+
+立即可用、无需重启；但**进程重启后需要重新挂载**（动态插件进程级）。
+
+## bundle 部署与源码同步
 
 ```sh
+# 首次安装
 dsh plugin --profile web add "file:D:/Constantly-evolving/collab-bundle"
-# 然后重启 DSH web 应用
+# 改过 collab-bundle/ 源码后【必须】同步副本（pnpm file: 依赖是复制不是链接！）
+powershell -File collab/sync-bundle.ps1
+# 然后重启 DSH
 ```
 
-- 装进 profile 后**所有窗口自动获得 collab 工具**，无需每窗口手动挂载
-- **随宿主启动自动加载，进程重启不丢**（动态插件版的最大痛点已解决）
-- 身份按"调用者 agent"区分（fork 窗口共享 sessionId 也互不干扰），用户可随时用 `collab_identity letter=X` 指定
-
-## 动态插件版（备用/免安装）
-
-读 `collab/plugin-host.js`（v2.1），每窗口 `cordis_define`(kind=new, idPrefix=collab) + `cordis_run`。
-注意：动态插件进程重启即失，需重新挂载；bundle 版无此问题。
+**血泪教训**：pnpm 的 file: 依赖不会自动同步源码——改 `collab-bundle/lib/index.js` 后直接重启，加载的永远是 node_modules 里的旧副本。改代码后务必先跑 `sync-bundle.ps1`。
 
 ## 工具
 
