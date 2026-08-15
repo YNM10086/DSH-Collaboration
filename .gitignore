@@ -2,9 +2,14 @@
 .dsh/collab/locks/
 .dsh/collab/activity.log
 .dsh/collab/identity.json
+# Collab 运行时目录整体（板子、调试产物等，不随仓库分发）
+.dsh/
 
 # 会话记忆（每用户工具状态，自动重建）
 _session_context.md
+
+# 第三方参考项目（本地下载，不随仓库分发）
+dsh-background-agents-main/
 
 # 编辑器/系统噪音
 .DS_Store

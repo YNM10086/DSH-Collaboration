@@ -58,3 +58,36 @@
 - **修复（v2.1）**：注册表 key 改为 `sessionId#窗口实例token`（token 每次插件启动随机生成），窗口实例级唯一，互不覆盖；旧格式条目自动迁移清理。
 - **状态**：✅ 已修复并验证（A 的 key = `session-0aced974...#mtq77b`，身份 A 稳固）
 - **待办**：B 窗口需重新部署 v2.1 并 `collab_identity letter=B` 绑定
+
+---
+
+## ✅ 验证：写被锁文件被拦截（预期行为，非报错）
+
+- **时间**：2026-08-15（UTC 05:13 前后）
+- **窗口**：B（session-43f9e831...，v2.1 bundle 常驻模式）| **插件版本**：v2.1
+- **场景**：窗口 A 认领 `games/snake/game.js`（任务"网页版游戏编译调试"，锁约 2 分钟），窗口 B 尝试写入
+- **结果**：
+  ```
+  Error: ⛔ D:\Constantly-evolving\games\snake\game.js 已被窗口A认领（网页版游戏编译调试（A 持有中，勿动））。用 collab_board --refresh 查看板子，或用 collab_claim 传入 cancel_wait=true 退队。
+  ```
+  - ✅ pre-execute deny 生效，edit 被拒绝
+  - ✅ 文件未被修改（搜索测试标记 0 匹配）
+  - ✅ 审计留痕（guard-check）
+- **结论**：写被锁文件 → 拦截路径验证通过（v2.1 bundle 常驻下 pre-execute 拦截正常）
+- **备注**：报错 3 的待办已完成——本窗口已部署 v2.1 且身份为 B（`collab_status` 显示 key `session-43f9e831...#ywp959` = 窗口B）
+
+---
+
+## ✅ 验证：认领被占 → 排队 → 释放后自动交接（预期行为，非报错）
+
+- **时间**：2026-08-15（UTC 05:16-05:19）
+- **窗口**：B | **插件版本**：v2.1
+- **场景**：窗口 A 持有 `games/snake/game.js`（模拟编译调试锁约 2 分钟），窗口 B 认领该文件
+- **结果**：
+  - B claim → `⏳ games/snake/game.js: 已被窗口A持有，你已排队第 1 位（释放后自动接管）`
+  - 锁文件：`holder=A, queue=["B"], released=false`；`collab_status` 排队第 1 位 ✓
+  - A 释放（`A done games/snake/game.js handover to B`）→ 锁文件 `holder=B, queue=[]`，claimedAt/heartbeat 刷新 ✓
+  - B `collab_status`：持锁 games/snake/game.js，排队无 ✓
+  - B `collab_done` 释放 → `✅ 已释放`（无队列，直接 released）✓
+- **审计链**：`B queue ... position 1` → `A done ... handover to B` → `B done ... released`，全程留痕 ✓
+- **结论**：排队 + 自动交接路径验证通过（v2.1 无回归）
