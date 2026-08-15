@@ -1,6 +1,7 @@
-// DSH Collab — 多窗口同项目协作（bundle 版 v3.0）
+// DSH Collab — 多窗口同项目协作（bundle 版 v3.0.1）
 // 宿主组合插件：所有会话自动获得 collab 工具，随宿主启动加载，重启不丢。
 // 身份按"调用者 agent"区分（WeakMap），fork 窗口即使共享 sessionId 也互不干扰。
+// v3.0.1 修复：config 是 apply 第二参数（cordis 惯例）；直接读 ctx.config 会被 Guard 拦截导致启动崩溃。
 // 设计文档：docs/superpowers/specs/2026-08-15-dsh-collab-plugin-design.md
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -16,8 +17,9 @@ export const Config = Schema.object({
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
-export function apply(ctx) {
-  const config = ctx.config ?? {}
+export function apply(ctx, config) {
+  // config 是 apply 第二参数（cordis 加载器校验 Config 后传入）；ctx.config 会被 Guard 拦截
+  config = config ?? {}
   const ttlMs = config.ttlMs ?? 15 * 60 * 1000
   const heartbeatMs = config.heartbeatMs ?? 60 * 1000
 
