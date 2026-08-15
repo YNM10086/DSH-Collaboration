@@ -101,7 +101,7 @@ git 建议：`locks/`、`activity.log`、`identity.json` 加入 `.gitignore`（�
 - **释放（done）**：删除锁目录；若 `queue` 非空，队首自动接管（锁目录重建、holder 更新），板子同步更新。
 - **过期**：`heartbeat` 超过 TTL（默认 15 分钟）视为死锁 → 队首接管，旧锁内容移入 `activity.log` 留痕。
 - **心跳**：插件用 `ctx.timer`（`inject: ['timer']`）周期性刷新自己持锁的心跳；同时监听 `agent/disposed` 事件主动清锁（窗口关闭即释放，不等 TTL）。
-- **退队**：`collab.claim --取消等待` 把自己从 queue 移除。
+- **退队**：`collab_claim` 传 `cancel_wait=true` 把自己从 queue 移除。
 - 锁文件写冲突：锁目录用 `mkdir` 原子性（谁 mkdir 成功谁是 holder），锁内 JSON 的 queue 更新用"读-改-原子写"（临时文件+rename），同窗口串行调用无竞争。
 
 ## 7. 拦截机制（防肘击核心）
@@ -133,17 +133,17 @@ git 建议：`locks/`、`activity.log`、`identity.json` 加入 `.gitignore`（�
 2026-08-15T12:16:00+08:00 窗口B take   src/auth.ts (queue head)
 ```
 
-- **冲突检测**：`collab.board` 读取时扫描审计日志，发现同一文件在相近时间窗口被两个不同窗口写入（且至少一方未持有锁）→ 板子顶部标红警告 + 建议 `git diff` 人工裁决。
+- **冲突检测**：`collab_board` 读取时扫描审计日志，发现同一文件在相近时间窗口被两个不同窗口写入（且至少一方未持有锁）→ 板子顶部标红警告 + 建议 `git diff` 人工裁决。
 - 审计是兜底：预防靠拦截，兜底靠记录，双保险。
 
 ## 9. 协作纪律注入
 
 插件用 `ctx.systemPrompt.section(...)` 给所在窗口注入协作规则段落，内容要点：
 
-1. 收到用户派活 → 先调 `collab.board` 查板（有无冲突、有无他人认领相关文件）。
-2. 开工 → `collab.claim <任务> <文件列表>` 认领；目标被占则入队等待，先做未锁部分。
+1. 收到用户派活 → 先调 `collab_board` 查板（有无冲突、有无他人认领相关文件）。
+2. 开工 → `collab_claim <任务> <文件列表>` 认领；目标被占则入队等待，先做未锁部分。
 3. 只动自己认领（或未认领）的文件；发现板上有冲突标记 → 停下问用户。
-4. 完成 → `collab.done <改动文件>` 更新板子并释放锁。
+4. 完成 → `collab_done <改动文件>` 更新板子并释放锁。
 5. 每回合开始、每次写文件前，刷新板子状态。
 
 注入由插件自动完成，用户不需要手动教每个窗口。
@@ -152,10 +152,12 @@ git 建议：`locks/`、`activity.log`、`identity.json` 加入 `.gitignore`（�
 
 | 工具 | 参数 | 行为 |
 |---|---|---|
-| `collab.board` | `--refresh` | 读板子 + 锁目录 + 审计，返回结构化状态（任务、持锁、队列、冲突警告、过期锁） |
-| `collab.claim` | `<任务> <文件列表> [--取消等待]` | 原子取锁；被占则入队；返回"已持有 / 已排队第 N 位" |
-| `collab.done` | `<任务> [<文件列表>]` | 释放锁 → 队首接管 → 更新板子 → 追加审计 |
-| `collab.status` | — | 本窗口身份字母、持锁列表、排队列表（可并入 board 输出） |
+| `collab_board` | `--refresh` | 读板子 + 锁目录 + 审计，返回结构化状态（任务、持锁、队列、冲突警告、过期锁） |
+| `collab_claim` | `<任务> <文件列表> [cancel_wait=true]` | 原子取锁；被占则入队；返回"已持有 / 已排队第 N 位" |
+| `collab_done` | `<任务> [<文件列表>]` | 释放锁 → 队首接管 → 更新板子 → 追加审计 |
+| `collab_status` | — | 本窗口身份字母、持锁列表、排队列表 |
+
+> 工具名规范：模型 API 要求函数名匹配 `^[a-zA-Z0-9_-]+$`，点号非法，故用下划线。
 
 工具注册用 `harness.registerTool(ctx, definition)`，注册挂在插件 Fiber 上（stop/update 自动清理）。
 
@@ -173,19 +175,19 @@ git 建议：`locks/`、`activity.log`、`identity.json` 加入 `.gitignore`（�
 
 ```
 窗口A: 用户说"写登录接口"
-   A: collab.board → 无冲突
-   A: collab.claim("登录接口", [src/auth.ts]) → 持有
+   A: collab_board → 无冲突
+   A: collab_claim("登录接口", [src/auth.ts]) → 持有
    A: 写 src/auth.ts ... 完成
-   A: collab.done → 释放，队首接管，审计登记
+   A: collab_done → 释放，队首接管，审计登记
 
 窗口B: 用户说"做登录页，顺便看看 auth 模块"
-   B: collab.board → 看到 A 锁了 src/auth.ts
-   B: collab.claim("登录页", [src/pages/login.tsx]) → 持有
+   B: collab_board → 看到 A 锁了 src/auth.ts
+   B: collab_claim("登录页", [src/pages/login.tsx]) → 持有
    B: 写 src/pages/login.tsx ✓（未锁文件放行）
    B: 尝试改 src/auth.ts → 拦截："已被窗口A锁定，你已排队第1位"
    B: 先做登录页其他部分
-   A: collab.done → 锁转给 B
-   B: 下回合 collab.board → "你已接管 src/auth.ts" → 继续
+   A: collab_done → 锁转给 B
+   B: 下回合 collab_board → "你已接管 src/auth.ts" → 继续
 ```
 
 ## 13. 边界与错误处理
@@ -197,7 +199,7 @@ git 建议：`locks/`、`activity.log`、`identity.json` 加入 `.gitignore`（�
 | 窗口崩溃 | TTL 过期 / `agent/disposed` 事件 → 队首接管 |
 | 插件自己写 .dsh/collab | 拦截钩子白名单放行 |
 | 板子被用户手改 | 板子由插件重写，用户编辑会被下次工具调用覆盖；只建议用户读 |
-| 锁目录残留 | 过期锁在 `collab.board` 时标记可接管并提示 |
+| 锁目录残留 | 过期锁在 `collab_board` 时标记可接管并提示 |
 | 身份注册竞争 | rename 原子 + 冲突重试（≤3 次） |
 | 沙箱权限 | 写 `.dsh/collab/` 需要 workspace-write，会话默认策略满足 |
 
